@@ -1,0 +1,699 @@
+# 🎯 מחולל דוחות ניהול סיכונים מלא - גרסה סופית
+# =====================================================
+
+# 📦 התקנות בסיסיות (רק מה שדרוש)
+!pip install python-docx PyPDF2 requests
+
+import os
+import re
+import json
+import docx
+import PyPDF2
+import requests
+from google.colab import files
+from datetime import datetime
+
+# 🎨 תבנית HTML מלאה וקבועה
+HTML_TEMPLATE = '''<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>דוח ניהול סיכונים - {{PROJECT_NAME}}</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #2c3e50;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: rgba(255, 255, 255, 0.98);
+            border-radius: 20px;
+            box-shadow: 0 25px 50px rgba(0, 0, 0, 0.15);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
+            color: white;
+            padding: 50px 40px;
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .header h1 {
+            font-size: 3em;
+            margin-bottom: 15px;
+            position: relative;
+            z-index: 1;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+
+        .editable {
+            padding: 3px;
+            border-radius: 3px;
+            transition: all 0.3s ease;
+        }
+
+        .edit-toggle {
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            background: #3498db;
+            color: white;
+            border: none;
+            padding: 15px 25px;
+            border-radius: 25px;
+            cursor: pointer;
+            font-size: 1em;
+            font-weight: bold;
+            box-shadow: 0 4px 15px rgba(52, 152, 219, 0.4);
+            z-index: 1000;
+            transition: all 0.3s ease;
+        }
+
+        .pdf-export {
+            position: fixed;
+            top: 80px;
+            left: 20px;
+            background: #e74c3c;
+            color: white;
+            border: none;
+            padding: 15px 25px;
+            border-radius: 25px;
+            cursor: pointer;
+            font-size: 1em;
+            font-weight: bold;
+            box-shadow: 0 4px 15px rgba(231, 76, 60, 0.4);
+            z-index: 1000;
+            transition: all 0.3s ease;
+        }
+
+        .section-header {
+            background: linear-gradient(135deg, #e74c3c 0%, #c0392b 100%);
+            color: white;
+            padding: 25px 40px;
+            font-size: 2.2em;
+            font-weight: bold;
+            text-align: center;
+            margin: 0;
+        }
+
+        .risks-container {
+            padding: 40px;
+            background: white;
+        }
+
+        .risk-summary {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 40px;
+        }
+
+        .summary-card {
+            background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+            padding: 25px;
+            border-radius: 15px;
+            text-align: center;
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
+        }
+
+        .summary-number {
+            font-size: 3em;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+
+        .very-high { color: #e74c3c; }
+        .high { color: #f39c12; }
+        .medium { color: #f1c40f; }
+        .low { color: #27ae60; }
+
+        .risks-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 25px;
+            margin-top: 30px;
+        }
+
+        .risk-card {
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            padding: 30px;
+            border-top: 6px solid;
+        }
+
+        .risk-very-high { border-top-color: #e74c3c; }
+        .risk-high { border-top-color: #f39c12; }
+        .risk-medium { border-top-color: #f1c40f; }
+        .risk-low { border-top-color: #27ae60; }
+
+        .risk-title {
+            font-size: 1.3em;
+            font-weight: bold;
+            color: #2c3e50;
+            margin-bottom: 15px;
+        }
+
+        .risk-metrics {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 15px;
+            margin: 20px 0;
+            text-align: center;
+        }
+
+        .metric {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 10px;
+        }
+
+        .metric-value {
+            font-size: 1.8em;
+            font-weight: bold;
+            color: #2c3e50;
+        }
+
+        .metric-label {
+            font-size: 0.9em;
+            color: #7f8c8d;
+            margin-top: 5px;
+        }
+
+        .risk-description {
+            color: #34495e;
+            line-height: 1.7;
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 10px;
+            margin-top: 15px;
+            border-right: 4px solid #bdc3c7;
+        }
+
+        .impact-list, .opportunity-list {
+            list-style: none;
+            padding-right: 15px;
+            margin: 10px 0;
+        }
+
+        .impact-list li::before {
+            content: '⚠️';
+            margin-left: 10px;
+        }
+
+        .opportunity-list li::before {
+            content: '✅';
+            margin-left: 10px;
+        }
+
+        .footer {
+            background: #2c3e50;
+            color: white;
+            text-align: center;
+            padding: 30px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <button class="edit-toggle" onclick="toggleEdit()">🎨 התחל עריכה</button>
+        <button class="pdf-export" onclick="exportToPDF()">📄 ייצוא ל-PDF</button>
+        
+        <header class="header">
+            <h1 class="editable">דוח ניהול סיכונים מקיף</h1>
+            <div class="editable">{{PROJECT_NAME}} - {{PROJECT_DESCRIPTION}}</div>
+            <div class="editable">{{ORGANIZATION}} • 2025</div>
+        </header>
+
+        <section class="section">
+            <div class="section-header editable">⚠️ ניהול סיכונים</div>
+            
+            <div class="risks-container">
+                <div class="risk-summary">
+                    <div class="summary-card">
+                        <div class="summary-number very-high editable">{{RISK_COUNT_VERY_HIGH}}</div>
+                        <div class="editable">סיכונים בחומרה<br>גבוהה מאוד</div>
+                    </div>
+                    <div class="summary-card">
+                        <div class="summary-number high editable">{{RISK_COUNT_HIGH}}</div>
+                        <div class="editable">סיכונים בחומרה<br>גבוהה</div>
+                    </div>
+                    <div class="summary-card">
+                        <div class="summary-number medium editable">{{RISK_COUNT_MEDIUM}}</div>
+                        <div class="editable">סיכונים בחומרה<br>בינונית</div>
+                    </div>
+                    <div class="summary-card">
+                        <div class="summary-number low editable">{{RISK_COUNT_LOW}}</div>
+                        <div class="editable">סיכונים בחומרה<br>נמוכה</div>
+                    </div>
+                </div>
+
+                <div class="risks-grid">
+                    {{RISKS_CARDS}}
+                </div>
+            </div>
+        </section>
+
+        <footer class="footer">
+            <p class="editable">© 2025 {{ORGANIZATION}}. כל הזכויות שמורות.</p>
+        </footer>
+    </div>
+
+    <script>
+        const editableElements = document.querySelectorAll('.editable');
+        const editToggleButton = document.querySelector('.edit-toggle');
+        let isEditing = false;
+
+        function toggleEdit() {
+            isEditing = !isEditing;
+            editableElements.forEach(el => {
+                el.contentEditable = isEditing;
+            });
+            editToggleButton.textContent = isEditing ? '💾 סיים עריכה' : '🎨 התחל עריכה';
+        }
+
+        function exportToPDF() {
+            window.print();
+        }
+    </script>
+</body>
+</html>'''
+
+# 🤖 מנתח AI (מספר אפשרויות)
+class AIAnalyzer:
+    def __init__(self, api_key=None, model_type="basic"):
+        self.api_key = api_key
+        self.model_type = model_type
+    
+    def analyze_risks(self, text):
+        """ניתוח סיכונים עם AI"""
+        if self.model_type == "claude" and self.api_key:
+            return self._analyze_with_claude(text)
+        elif self.model_type == "huggingface":
+            return self._analyze_with_huggingface(text)
+        else:
+            return self._basic_analysis(text)
+    
+    def _analyze_with_claude(self, text):
+        """ניתוח עם Claude API"""
+        try:
+            headers = {
+                'Content-Type': 'application/json',
+                'x-api-key': self.api_key,
+                'anthropic-version': '2023-06-01'
+            }
+            
+            prompt = f"""
+            נתח את מסמך התפיסה הבא וזהה 5 הסיכונים העיקריים:
+
+            {text[:3000]}
+
+            עבור כל סיכון, ספק:
+            1. כותרת קצרה (עד 8 מילים)
+            2. תיאור מפורט (2-3 משפטים)
+            3. הסתברות (1-10)
+            4. עוצמת נזק (1-10)
+            5. 3 השלכות אפשריות
+            6. 3 הזדמנויות
+
+            החזר תשובה בפורמט JSON בלבד:
+            {{
+                "risks": [
+                    {{
+                        "title": "כותרת הסיכון",
+                        "description": "תיאור מפורט",
+                        "probability": 8,
+                        "impact": 9,
+                        "impacts": ["השלכה 1", "השלכה 2", "השלכה 3"],
+                        "opportunities": ["הזדמנות 1", "הזדמנות 2", "הזדמנות 3"]
+                    }}
+                ]
+            }}
+            """
+            
+            data = {
+                "model": "claude-3-sonnet-20240229",
+                "max_tokens": 2000,
+                "messages": [{"role": "user", "content": prompt}]
+            }
+            
+            response = requests.post(
+                'https://api.anthropic.com/v1/messages',
+                headers=headers,
+                json=data,
+                timeout=30
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                content = result['content'][0]['text']
+                # נסה לחלץ JSON מהתשובה
+                json_start = content.find('{')
+                json_end = content.rfind('}') + 1
+                if json_start != -1 and json_end != -1:
+                    json_content = content[json_start:json_end]
+                    return json.loads(json_content)
+            
+        except Exception as e:
+            print(f"⚠️ שגיאה בניתוח Claude: {e}")
+        
+        # אם נכשל, חזור לניתוח בסיסי
+        return self._basic_analysis(text)
+    
+    def _analyze_with_huggingface(self, text):
+        """ניתוח עם Hugging Face (חינם)"""
+        # כאן אפשר להוסיף ניתוח עם מודלים חינמיים
+        return self._basic_analysis(text)
+    
+    def _basic_analysis(self, text):
+        """ניתוח בסיסי עם חוקים"""
+        risk_patterns = [
+            {
+                "keywords": ["התנגדות", "שינוי", "ארגוני"],
+                "title": "התנגדות ארגונית לשינוי",
+                "description": "קיים סיכון להתנגדות מצד עובדים או מנהלים לתהליכי השינוי המוצעים בפרויקט.",
+                "probability": 8,
+                "impact": 9
+            },
+            {
+                "keywords": ["תקציב", "מחסור", "עלות"],
+                "title": "מחסור תקציבי",
+                "description": "הפרויקט עלול להיתקל במגבלות תקציביות שיפגעו ביישום המלא.",
+                "probability": 7,
+                "impact": 8
+            },
+            {
+                "keywords": ["טכנולוגיה", "מורכבות", "מערכת"],
+                "title": "מורכבות טכנולוגית",
+                "description": "השילוב של מערכות טכנולוגיות חדשות עלול ליצור אתגרים טכניים לא צפויים.",
+                "probability": 6,
+                "impact": 7
+            },
+            {
+                "keywords": ["הכשרה", "מורים", "כישורים"],
+                "title": "פערי כישורים והכשרה",
+                "description": "חוסר בהכשרה מתאימה עלול לפגוע ביכולת הצוותים לממש את הפרויקט.",
+                "probability": 7,
+                "impact": 6
+            },
+            {
+                "keywords": ["לוח", "זמן", "עיכוב"],
+                "title": "עיכובים בלוח הזמנים",
+                "description": "הפרויקט עלול להתעכב בשל גורמים חיצוניים או תלויות בין משימות.",
+                "probability": 5,
+                "impact": 5
+            }
+        ]
+        
+        risks = []
+        text_lower = text.lower()
+        
+        for pattern in risk_patterns:
+            if any(keyword in text_lower for keyword in pattern["keywords"]):
+                risk = {
+                    "title": pattern["title"],
+                    "description": pattern["description"],
+                    "probability": pattern["probability"],
+                    "impact": pattern["impact"],
+                    "impacts": [
+                        "פגיעה ביעדי הפרויקט",
+                        "עיכובים בלוח הזמנים",
+                        "עלויות נוספות לא צפויות"
+                    ],
+                    "opportunities": [
+                        "פיתוח פתרונות חדשניים",
+                        "חיזוק יכולות הצוות",
+                        "שיפור תהליכי העבודה"
+                    ]
+                }
+                risks.append(risk)
+        
+        return {"risks": risks[:5]}
+
+# 🔧 מחולל הדוחות הראשי
+class RiskReportGenerator:
+    def __init__(self, ai_analyzer=None):
+        self.ai_analyzer = ai_analyzer or AIAnalyzer()
+        self.template = HTML_TEMPLATE
+    
+    def extract_text_from_docx(self, file_path):
+        """חילוץ טקסט מקובץ Word"""
+        try:
+            doc = docx.Document(file_path)
+            text = []
+            for paragraph in doc.paragraphs:
+                if paragraph.text.strip():
+                    text.append(paragraph.text.strip())
+            return '\n'.join(text)
+        except Exception as e:
+            print(f"❌ שגיאה בקריאת קובץ Word: {e}")
+            return ""
+    
+    def extract_text_from_pdf(self, file_path):
+        """חילוץ טקסט מקובץ PDF"""
+        try:
+            text = []
+            with open(file_path, 'rb') as file:
+                pdf_reader = PyPDF2.PdfReader(file)
+                for page in pdf_reader.pages:
+                    page_text = page.extract_text()
+                    if page_text.strip():
+                        text.append(page_text.strip())
+            return '\n'.join(text)
+        except Exception as e:
+            print(f"❌ שגיאה בקריאת קובץ PDF: {e}")
+            return ""
+    
+    def extract_project_info(self, text):
+        """חילוץ מידע בסיסי על הפרויקט"""
+        lines = text.split('\n')
+        
+        # חיפוש שם פרויקט
+        project_name = "פרויקט חדשנות חינוכית"
+        for line in lines[:10]:  # בדוק 10 שורות ראשונות
+            if any(word in line.lower() for word in ['פרויקט', 'פיילוט', 'תכנית', 'יוזמה']):
+                if len(line.strip()) > 5:
+                    project_name = line.strip()[:50]
+                    break
+        
+        # חיפוש ארגון
+        organization = "משרד החינוך"
+        if "משרד החינוך" in text:
+            organization = "משרד החינוך"
+        
+        # תיאור
+        description = "מודל ארגוני-פדגוגי חדשני"
+        
+        return project_name, organization, description
+    
+    def format_risks_html(self, risks_data):
+        """עיצוב הסיכונים ל-HTML"""
+        if not risks_data or 'risks' not in risks_data:
+            return ""
+        
+        html_parts = []
+        severity_classes = {
+            'very_high': ('risk-very-high', 'חומרה גבוהה מאוד'),
+            'high': ('risk-high', 'חומרה גבוהה'),
+            'medium': ('risk-medium', 'חומרה בינונית'),
+            'low': ('risk-low', 'חומרה נמוכה')
+        }
+        
+        for risk in risks_data['risks']:
+            severity_score = risk['probability'] * risk['impact']
+            
+            if severity_score >= 70:
+                severity_level = 'very_high'
+            elif severity_score >= 50:
+                severity_level = 'high'
+            elif severity_score >= 30:
+                severity_level = 'medium'
+            else:
+                severity_level = 'low'
+            
+            class_name, severity_text = severity_classes[severity_level]
+            
+            impacts_html = '\n'.join([f'<li class="editable">{impact}</li>' for impact in risk.get('impacts', [])])
+            opportunities_html = '\n'.join([f'<li class="editable">{opp}</li>' for opp in risk.get('opportunities', [])])
+            
+            risk_html = f'''
+            <div class="risk-card {class_name}">
+                <div class="risk-title editable">{risk['title']}</div>
+                <div class="risk-metrics">
+                    <div class="metric">
+                        <div class="metric-value editable">{risk['probability']}</div>
+                        <div class="metric-label editable">הסתברות</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-value editable">{risk['impact']}</div>
+                        <div class="metric-label editable">עוצמת נזק</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-value editable">{severity_score}</div>
+                        <div class="metric-label editable">דרגת חומרה</div>
+                    </div>
+                </div>
+                <div class="risk-description editable">{risk['description']}</div>
+                <div style="margin-top: 15px;">
+                    <strong style="color: #e74c3c;">השלכות אפשריות:</strong>
+                    <ul class="impact-list">{impacts_html}</ul>
+                </div>
+                <div style="margin-top: 15px;">
+                    <strong style="color: #27ae60;">הזדמנויות:</strong>
+                    <ul class="opportunity-list">{opportunities_html}</ul>
+                </div>
+            </div>
+            '''
+            html_parts.append(risk_html)
+        
+        return '\n'.join(html_parts)
+    
+    def count_risks_by_severity(self, risks_data):
+        """ספירת סיכונים לפי חומרה"""
+        if not risks_data or 'risks' not in risks_data:
+            return {'very_high': 0, 'high': 0, 'medium': 0, 'low': 0}
+        
+        counts = {'very_high': 0, 'high': 0, 'medium': 0, 'low': 0}
+        
+        for risk in risks_data['risks']:
+            severity_score = risk['probability'] * risk['impact']
+            if severity_score >= 70:
+                counts['very_high'] += 1
+            elif severity_score >= 50:
+                counts['high'] += 1
+            elif severity_score >= 30:
+                counts['medium'] += 1
+            else:
+                counts['low'] += 1
+        
+        return counts
+    
+    def generate_report(self, text):
+        """יצירת הדוח המלא"""
+        print("🔍 מנתח את המסמך...")
+        
+        # חילוץ מידע בסיסי
+        project_name, organization, description = self.extract_project_info(text)
+        
+        print("🤖 מריץ ניתוח AI...")
+        
+        # ניתוח AI
+        risks_data = self.ai_analyzer.analyze_risks(text)
+        
+        print("⚙️ בונה את הדוח...")
+        
+        # ספירת סיכונים
+        risk_counts = self.count_risks_by_severity(risks_data)
+        
+        # בניית HTML
+        risks_html = self.format_risks_html(risks_data)
+        
+        # החלפת משתנים
+        html = self.template.replace('{{PROJECT_NAME}}', project_name)
+        html = html.replace('{{ORGANIZATION}}', organization)
+        html = html.replace('{{PROJECT_DESCRIPTION}}', description)
+        html = html.replace('{{RISKS_CARDS}}', risks_html)
+        html = html.replace('{{RISK_COUNT_VERY_HIGH}}', str(risk_counts['very_high']))
+        html = html.replace('{{RISK_COUNT_HIGH}}', str(risk_counts['high']))
+        html = html.replace('{{RISK_COUNT_MEDIUM}}', str(risk_counts['medium']))
+        html = html.replace('{{RISK_COUNT_LOW}}', str(risk_counts['low']))
+        
+        return html
+
+# 🚀 פונקציה ראשית
+def create_risk_report_with_ai():
+    """פונקציה ראשית ליצירת דוח עם AI"""
+    print("🎯 מחולל דוחות ניהול סיכונים עם AI")
+    print("=====================================")
+    
+    # בחירת סוג AI
+    print("🤖 בחר סוג ניתוח AI:")
+    print("1. בסיסי (חינם)")
+    print("2. Claude Pro (דרוש API key)")
+    print("3. Hugging Face (חינם)")
+    
+    choice = input("הכנס מספר (1-3): ").strip()
+    
+    # הגדרת מנתח AI
+    if choice == "2":
+        api_key = input("🔑 הכנס Claude API key: ").strip()
+        if api_key:
+            analyzer = AIAnalyzer(api_key=api_key, model_type="claude")
+            print("✅ Claude AI מוכן!")
+        else:
+            analyzer = AIAnalyzer(model_type="basic")
+            print("⚠️ לא הוזן API key, משתמש בניתוח בסיסי")
+    elif choice == "3":
+        analyzer = AIAnalyzer(model_type="huggingface")
+        print("🤗 Hugging Face מוכן!")
+    else:
+        analyzer = AIAnalyzer(model_type="basic")
+        print("📊 ניתוח בסיסי מוכן!")
+    
+    # העלאת קובץ
+    print("\n📁 אנא העלה את מסמך התפיסה:")
+    uploaded = files.upload()
+    
+    if not uploaded:
+        print("❌ לא הועלה קובץ")
+        return
+    
+    filename = list(uploaded.keys())[0]
+    print(f"📄 מעבד את הקובץ: {filename}")
+    
+    # יצירת מחולל הדוחות
+    generator = RiskReportGenerator(ai_analyzer=analyzer)
+    
+    # חילוץ טקסט
+    if filename.lower().endswith('.docx'):
+        text = generator.extract_text_from_docx(filename)
+    elif filename.lower().endswith('.pdf'):
+        text = generator.extract_text_from_pdf(filename)
+    else:
+        print("❌ פורמט קובץ לא נתמך. אנא העלה קובץ Word או PDF")
+        return
+    
+    if not text.strip():
+        print("❌ לא הצלחתי לחלץ טקסט מהקובץ")
+        return
+    
+    print(f"✅ חולץ טקסט: {len(text)} תווים")
+    
+    # יצירת הדוח
+    try:
+        html_report = generator.generate_report(text)
+        
+        # שמירת הקובץ
+        output_filename = f"risk_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
+        
+        with open(output_filename, 'w', encoding='utf-8') as f:
+            f.write(html_report)
+        
+        print(f"✅ הדוח נוצר בהצלחה!")
+        print(f"📊 קובץ נשמר בשם: {output_filename}")
+        
+        # הורדת הקובץ
+        files.download(output_filename)
+        
+        print("🎉 הדוח מוכן לשימוש!")
+        
+    except Exception as e:
+        print(f"❌ שגיאה ביצירת הדוח: {e}")
+
+# 🎬 הפעלה ראשית
+if __name__ == "__main__":
+    create_risk_report_with_ai()
